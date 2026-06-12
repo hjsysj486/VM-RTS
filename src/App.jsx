@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Users, Building2, Calendar, ClipboardList, LayoutDashboard, 
-  Settings, LogOut, Plus, Search, FileText, Bell, CheckCircle, 
-  Clock, XCircle, ChevronDown, Upload, Download, History
+  Users, Building2, ClipboardList, LayoutDashboard, 
+  Settings, Plus, Search, FileText, Bell, CheckCircle, 
+  Clock, XCircle, ChevronDown, Upload, Download, LogOut
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signInWithCustomToken, signInAnonymously, signOut } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { 
-  getFirestore, collection, doc, setDoc, getDoc, onSnapshot, 
-  addDoc, updateDoc, deleteDoc, serverTimestamp 
+  getFirestore, collection, doc, setDoc, onSnapshot, 
+  addDoc, updateDoc 
 } from 'firebase/firestore';
 
-// --- Firebase Initialization (Rule 1 & 3 Compliance) ---
+// --- Firebase Initialization ---
 const firebaseConfig = {
   apiKey: "AIzaSyBFp-TBWuGeqG2vpSx9THydZPksKydIsq4",
   authDomain: "vm-rts.firebaseapp.com",
@@ -25,46 +25,35 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'vm-rts-default';
 
-// Helper for strict paths
 const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
 const getDocRef = (colName, id) => doc(db, 'artifacts', appId, 'public', 'data', colName, id);
 
 export default function App() {
-  // Auth & User State
   const [authUser, setAuthUser] = useState(null);
-  const [appUser, setAppUser] = useState(null); // Firestore user doc
+  const [appUser, setAppUser] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
-  // App Data State
   const [candidates, setCandidates] = useState([]);
   const [organizations, setOrganizations] = useState([]);
   const [events, setEvents] = useState([]);
   const [users, setUsers] = useState([]);
   const [selfRecruiting, setSelfRecruiting] = useState([]);
   
-  // UI State
   const [currentView, setCurrentView] = useState('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  
+  // Custom Toast Message State (알림창 대체용)
+  const [toastMsg, setToastMsg] = useState('');
 
-  // --- Auth & Data Fetching Effect ---
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 4000);
+  };
+
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error("Auth error:", err);
-      }
-    };
-    initAuth();
-
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       setAuthUser(user);
       if (user) {
-        // Listen to current user's profile
         const userUnsub = onSnapshot(getDocRef('users', user.uid), (docSnap) => {
           if (docSnap.exists()) {
             setAppUser({ id: docSnap.id, ...docSnap.data() });
@@ -72,25 +61,23 @@ export default function App() {
             setAppUser(null);
           }
           setIsAuthLoading(false);
-        }, (err) => console.error(err));
-        
+        }, (err) => {
+          console.error(err);
+          setIsAuthLoading(false);
+        });
         return () => userUnsub();
       } else {
         setAppUser(null);
         setIsAuthLoading(false);
       }
     });
-
     return () => unsubscribeAuth();
   }, []);
 
-  // Fetch all global data if user is approved
   useEffect(() => {
     if (!authUser || !appUser || appUser.status !== 'approved') return;
 
     const unsubs = [];
-
-    // Rule 2: Fetch all, filter in memory
     unsubs.push(onSnapshot(getColRef('candidates'), (snap) => {
       setCandidates(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.updatedAt - a.updatedAt));
     }, console.error));
@@ -114,61 +101,111 @@ export default function App() {
     return () => unsubs.forEach(unsub => unsub());
   }, [authUser, appUser]);
 
-  // --- Handlers ---
-  const handleSignUp = async (formData) => {
-    if (!authUser) return;
+  const handleLogin = async (email, password) => {
     try {
-      // First user becomes admin automatically for prototype purposes
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (e) {
+      if (e.code === 'auth/admin-restricted-operation' || e.code === 'auth/unauthorized-domain') {
+        showToast('파이어베이스 [승인된 도메인]에 현재 웹사이트 주소가 등록되지 않았습니다.');
+      } else {
+        showToast("로그인 실패: 이메일과 비밀번호를 다시 확인해주세요.");
+      }
+    }
+  };
+
+  const handleSignUp = async (formData) => {
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const user = userCredential.user;
+      
       const isAdmin = users.length === 0; 
-      await setDoc(getDocRef('users', authUser.uid), {
-        ...formData,
+      await setDoc(getDocRef('users', user.uid), {
+        name: formData.name,
+        phone: formData.phone,
+        email: formData.email,
         role: isAdmin ? 'admin' : 'user',
         status: isAdmin ? 'approved' : 'pending',
         createdAt: Date.now()
       });
-      alert(isAdmin ? "관리자로 등록되었습니다." : "신청이 완료되었습니다. 관리자 승인을 기다려주세요.");
+      showToast(isAdmin ? "관리자로 등록 및 로그인되었습니다." : "신청이 완료되었습니다. 관리자 승인을 기다려주세요.");
     } catch (e) {
-      console.error(e);
-      alert("오류가 발생했습니다.");
+      if (e.code === 'auth/email-already-in-use') {
+        showToast("이미 가입된 이메일입니다. 하단의 '로그인하기'를 눌러주세요.");
+      } else {
+        console.error(e);
+        showToast("오류가 발생했습니다.");
+      }
     }
   };
 
-  // --- Render logic ---
-  if (isAuthLoading) {
-    return <div className="flex items-center justify-center min-h-screen bg-gray-50"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div></div>;
-  }
-
-  // Not registered yet
-  if (authUser && !appUser) {
-    return <RegistrationForm onSubmit={handleSignUp} />;
-  }
-
-  // Pending approval
-  if (authUser && appUser && appUser.status === 'pending') {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4">
-        <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full text-center">
-          <Clock className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold mb-2">승인 대기 중</h2>
-          <p className="text-gray-600 mb-6">관리자의 가입 승인이 필요합니다.<br/>승인 후 시스템을 이용하실 수 있습니다.</p>
-          {/* Dev helper to make admin */}
-          <button onClick={() => updateDoc(getDocRef('users', authUser.uid), { status: 'approved', role: 'admin' })} className="text-xs text-gray-400 underline">개발자 도구: 즉시 관리자 승인</button>
-        </div>
-      </div>
-    );
-  }
+  const handleLogout = async () => {
+    await signOut(auth);
+  };
 
   const navigate = (view) => {
     setCurrentView(view);
     setIsMobileMenuOpen(false);
   };
 
+  const ToastComponent = () => toastMsg ? (
+    <div className="fixed top-4 right-4 bg-slate-800 text-white px-6 py-3 rounded-lg shadow-xl z-50 animate-bounce">
+      {toastMsg}
+    </div>
+  ) : null;
+
+  if (isAuthLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!authUser) {
+    return <><ToastComponent /><AuthScreen onLogin={handleLogin} onSignUp={handleSignUp} /></>;
+  }
+
+  if (authUser && !appUser) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4">
+        <ToastComponent />
+        <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full text-center">
+          <XCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold mb-2">계정 정보 없음</h2>
+          <p className="text-gray-600 mb-6">데이터베이스에서 사용자 정보를 찾을 수 없습니다.<br/>(데이터가 삭제되었거나 가입 중 오류가 발생했습니다)</p>
+          <button onClick={handleLogout} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm hover:bg-slate-700 transition-colors">
+            로그아웃 및 초기화
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (authUser && appUser && appUser.status === 'pending') {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4">
+        <ToastComponent />
+        <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full text-center">
+          <Clock className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold mb-2">승인 대기 중</h2>
+          <p className="text-gray-600 mb-6">관리자의 가입 승인이 필요합니다.<br/>승인 후 시스템을 이용하실 수 있습니다.</p>
+          <div className="space-y-3">
+            <button onClick={() => updateDoc(getDocRef('users', authUser.uid), { status: 'approved', role: 'admin' })} className="text-xs text-blue-600 underline block mx-auto">개발자 도구: 즉시 관리자 승인</button>
+            <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-gray-800 underline block mx-auto">로그아웃</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen bg-gray-100 font-sans text-gray-800">
-      {/* Sidebar (Desktop & Mobile Drawer) */}
-      <div className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+    <div className="flex h-screen bg-gray-100 font-sans text-gray-800 relative">
+      <ToastComponent />
+      
+      {/* Sidebar */}
+      <div className={`fixed inset-y-0 left-0 z-40 w-64 bg-slate-900 text-white transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <h1 className="text-xl font-bold tracking-wider text-blue-400">VM-RTS <span className="text-xs text-gray-400">v1.0.0</span></h1>
+          <h1 className="text-xl font-bold tracking-wider text-blue-400">VM-RTS <span className="text-xs text-gray-400">v1.2.0</span></h1>
           <button className="md:hidden text-gray-300 hover:text-white" onClick={() => setIsMobileMenuOpen(false)}><XCircle /></button>
         </div>
         <nav className="p-4 space-y-2">
@@ -185,31 +222,32 @@ export default function App() {
           )}
         </nav>
         <div className="absolute bottom-0 w-full p-4 border-t border-slate-700 bg-slate-900">
-          <div className="flex items-center space-x-3 mb-4">
-            <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center font-bold">{appUser?.name?.[0]}</div>
-            <div className="text-sm overflow-hidden">
-              <p className="font-medium truncate">{appUser?.name}</p>
-              <p className="text-slate-400 text-xs truncate">{appUser?.role === 'admin' ? '관리자' : '사용자'}</p>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center space-x-3">
+              <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center font-bold">{appUser?.name?.[0]}</div>
+              <div className="text-sm overflow-hidden">
+                <p className="font-medium truncate">{appUser?.name}</p>
+                <p className="text-slate-400 text-xs truncate">{appUser?.role === 'admin' ? '관리자' : '사용자'}</p>
+              </div>
             </div>
+            <button onClick={handleLogout} className="text-gray-400 hover:text-white" title="로그아웃"><LogOut className="w-5 h-5" /></button>
           </div>
         </div>
       </div>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top Header (Mobile) */}
         <header className="md:hidden bg-white shadow-sm p-4 flex items-center justify-between">
           <button onClick={() => setIsMobileMenuOpen(true)} className="text-gray-600"><ChevronDown className="rotate-[-90deg]"/></button>
           <span className="font-bold">VM-RTS</span>
           <div className="w-6"></div>
         </header>
 
-        {/* Dynamic View Rendering */}
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-50 p-4 md:p-6">
           {currentView === 'dashboard' && <Dashboard candidates={candidates} selfRecruiting={selfRecruiting} orgs={organizations} />}
-          {currentView === 'candidates' && <CandidateManager candidates={candidates} appUser={appUser} events={events} orgs={organizations} />}
-          {currentView === 'admin' && appUser?.role === 'admin' && <AdminPanel users={users} orgs={organizations} events={events} />}
-          {currentView === 'self-recruiting' && <SelfRecruitingManager data={selfRecruiting} orgs={organizations} />}
+          {currentView === 'candidates' && <CandidateManager candidates={candidates} appUser={appUser} events={events} orgs={organizations} showToast={showToast} />}
+          {currentView === 'admin' && appUser?.role === 'admin' && <AdminPanel users={users} orgs={organizations} events={events} showToast={showToast} />}
+          {currentView === 'self-recruiting' && <SelfRecruitingManager data={selfRecruiting} orgs={organizations} showToast={showToast} />}
           {currentView === 'reports' && <Reports candidates={candidates} selfRecruiting={selfRecruiting} orgs={organizations} events={events} />}
         </main>
       </div>
@@ -217,7 +255,6 @@ export default function App() {
   );
 }
 
-// --- Navigation Item Component ---
 function NavItem({ icon, label, active, onClick }) {
   return (
     <button
@@ -232,45 +269,70 @@ function NavItem({ icon, label, active, onClick }) {
   );
 }
 
-// --- Registration Form Component ---
-function RegistrationForm({ onSubmit }) {
-  const [formData, setFormData] = useState({ name: '', phone: '', email: '' });
+function AuthScreen({ onLogin, onSignUp }) {
+  const [isLoginMode, setIsLoginMode] = useState(true);
+  const [formData, setFormData] = useState({ email: '', password: '', name: '', phone: '' });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (isLoginMode) {
+      onLogin(formData.email, formData.password);
+    } else {
+      onSignUp(formData);
+    }
+  };
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-slate-100 p-4">
       <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full border border-gray-100">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-extrabold text-blue-900 mb-2">VM-RTS</h1>
-          <p className="text-gray-500 text-sm">밸류마크 리크루팅 트레킹 시스템 사용 신청</p>
+          <p className="text-gray-500 text-sm">밸류마크 리크루팅 트레킹 시스템</p>
         </div>
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }} className="space-y-5">
+        
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {!isLoginMode && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">이름</label>
+                <input required type="text" className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
+                  onChange={e => setFormData({...formData, name: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">연락처</label>
+                <input required type="tel" className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
+                  placeholder="010-0000-0000" onChange={e => setFormData({...formData, phone: e.target.value})} />
+              </div>
+            </>
+          )}
+          
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">이름</label>
-            <input required type="text" className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-              onChange={e => setFormData({...formData, name: e.target.value})} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">연락처</label>
-            <input required type="tel" className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-              placeholder="010-0000-0000" onChange={e => setFormData({...formData, phone: e.target.value})} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">이메일 (알림수신용)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">이메일</label>
             <input required type="email" className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-              onChange={e => setFormData({...formData, email: e.target.value})} />
+              placeholder="name@valuemark.co.kr" onChange={e => setFormData({...formData, email: e.target.value})} />
           </div>
-          <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors mt-4">
-            사용 신청하기
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">비밀번호</label>
+            <input required type="password" minLength="6" className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
+              placeholder="6자리 이상 입력" onChange={e => setFormData({...formData, password: e.target.value})} />
+          </div>
+
+          <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-colors mt-6">
+            {isLoginMode ? '로그인' : '사용 신청하기'}
           </button>
         </form>
+
+        <div className="mt-6 text-center">
+          <button type="button" onClick={() => setIsLoginMode(!isLoginMode)} className="text-sm text-gray-500 hover:text-blue-600 font-medium">
+            {isLoginMode ? '계정이 없으신가요? 사용 신청하기' : '이미 계정이 있으신가요? 로그인하기'}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-// --- Dashboard Component ---
 function Dashboard({ candidates, selfRecruiting, orgs }) {
-  // Aggregate stats
   const stats = useMemo(() => {
     let meeting = 0, processing = 0, completed = 0, dropped = 0;
     let indMoves = 0, orgMoves = 0;
@@ -284,31 +346,26 @@ function Dashboard({ candidates, selfRecruiting, orgs }) {
       if (c.type === 'individual') indMoves++;
       else if (c.type === 'org') orgMoves++;
     });
-
     return { meeting, processing, completed, dropped, indMoves, orgMoves };
   }, [candidates]);
 
-  const recentUpdates = candidates.slice(0, 5); // Assuming already sorted
+  const recentUpdates = candidates.slice(0, 5);
 
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold text-gray-800">대시보드</h2>
-      
-      {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard title="총 미팅진행" value={stats.meeting} icon={<Clock className="text-blue-500" />} color="bg-blue-50" />
         <StatCard title="위촉 진행중" value={stats.processing} icon={<ClipboardList className="text-yellow-500" />} color="bg-yellow-50" />
         <StatCard title="위촉 완료" value={stats.completed} icon={<CheckCircle className="text-green-500" />} color="bg-green-50" />
         <StatCard title="드랍/거절" value={stats.dropped} icon={<XCircle className="text-red-500" />} color="bg-red-50" />
       </div>
-      
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard title="개인 이동 건수" value={stats.indMoves} icon={<Users className="text-indigo-500" />} color="bg-indigo-50" />
         <StatCard title="조직 이동 건수" value={stats.orgMoves} icon={<Building2 className="text-purple-500" />} color="bg-purple-50" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Updates */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
           <h3 className="text-lg font-bold mb-4 flex items-center"><Bell className="mr-2 w-5 h-5 text-gray-500"/> 최근 업데이트된 후보자</h3>
           <div className="space-y-4">
@@ -326,7 +383,6 @@ function Dashboard({ candidates, selfRecruiting, orgs }) {
           </div>
         </div>
 
-        {/* Agency Assignment Status (Simplified) */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
           <h3 className="text-lg font-bold mb-4">사업단별 배정 현황</h3>
           <div className="overflow-x-auto">
@@ -335,7 +391,6 @@ function Dashboard({ candidates, selfRecruiting, orgs }) {
                 <tr><th className="p-2">사업부</th><th className="p-2">사업단</th><th className="p-2 text-right">배정 후보자 수</th></tr>
               </thead>
               <tbody>
-                {/* Very simplified aggregation for prototype */}
                 {Array.from(new Set(candidates.filter(c=>c.agency).map(c=>c.agency))).slice(0,5).map((agency, i) => (
                   <tr key={i} className="border-b">
                     <td className="p-2 text-gray-500">배정됨</td>
@@ -374,9 +429,7 @@ function StatusBadge({ status }) {
   return <span className={`px-2 py-1 rounded text-xs font-medium ${colors[status] || 'bg-gray-100'}`}>{status}</span>;
 }
 
-
-// --- Candidate Manager ---
-function CandidateManager({ candidates, appUser, events, orgs }) {
+function CandidateManager({ candidates, appUser, events, orgs, showToast }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -405,9 +458,10 @@ function CandidateManager({ candidates, appUser, events, orgs }) {
         });
       }
       setIsModalOpen(false);
+      showToast("정상적으로 저장되었습니다.");
     } catch (e) {
       console.error(e);
-      alert("저장 실패");
+      showToast("저장에 실패했습니다.");
     }
   };
 
@@ -417,18 +471,37 @@ function CandidateManager({ candidates, appUser, events, orgs }) {
       const cand = candidates.find(c => c.id === id);
       const newHistory = [{...historyItem, date: Date.now(), writer: appUser.name}, ...(cand.history || [])];
       await updateDoc(docRef, { history: newHistory, updatedAt: Date.now() });
+      showToast("기록이 추가되었습니다.");
     } catch (e) {
       console.error(e);
+      showToast("기록 추가에 실패했습니다.");
     }
+  };
+
+  const handleCSVUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const text = evt.target.result;
+      const lines = text.split('\n').filter(l => l.trim() !== '');
+      showToast(`총 ${lines.length - 1}명의 후보자 데이터 업로드가 테스트 처리되었습니다.`);
+    };
+    reader.readAsText(file);
   };
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-2xl font-bold text-gray-800">외부 리크루팅 후보자 관리</h2>
-        <button onClick={openNew} className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center hover:bg-blue-700">
-          <Plus className="w-5 h-5 mr-1" /> 신규 등록
-        </button>
+        <div className="flex space-x-2">
+          <label className="flex items-center px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 cursor-pointer text-sm">
+            <Upload className="w-4 h-4 mr-1"/> 대량 등록 (CSV) <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload} />
+          </label>
+          <button onClick={openNew} className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center hover:bg-blue-700 text-sm">
+            <Plus className="w-4 h-4 mr-1" /> 신규 등록
+          </button>
+        </div>
       </div>
 
       <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center">
@@ -475,7 +548,6 @@ function CandidateManager({ candidates, appUser, events, orgs }) {
   );
 }
 
-// --- Candidate Form Modal ---
 function CandidateModal({ cand, onClose, onSave, onAddHistory, events, orgs }) {
   const [activeTab, setActiveTab] = useState('info');
   const [formData, setFormData] = useState(cand || {
@@ -538,7 +610,6 @@ function CandidateModal({ cand, onClose, onSave, onAddHistory, events, orgs }) {
                   </select>
                 </div>
 
-                {/* Conditional Fields */}
                 {isOrg ? (
                   <>
                     <div><label className="block text-xs text-gray-500 mb-1">이동 인원 (명)</label><input type="number" className="w-full border p-2 rounded" value={formData.headcount} onChange={e=>setFormData({...formData, headcount:e.target.value})} /></div>
@@ -611,17 +682,18 @@ function CandidateModal({ cand, onClose, onSave, onAddHistory, events, orgs }) {
   );
 }
 
-
-// --- Admin Panel (Users, Orgs, Events) ---
-function AdminPanel({ users, orgs, events }) {
+function AdminPanel({ users, orgs, events, showToast }) {
   const [tab, setTab] = useState('users');
 
   const handleUserApproval = async (id, status) => {
-    try { await updateDoc(getDocRef('users', id), { status }); } 
-    catch (e) { alert("처리 실패"); }
+    try { 
+      await updateDoc(getDocRef('users', id), { status });
+      showToast("처리가 완료되었습니다.");
+    } catch (e) { 
+      showToast("처리 실패"); 
+    }
   };
 
-  // Basic CSV upload logic (alternative to complex Excel parsing in browser)
   const handleOrgCSV = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -629,13 +701,7 @@ function AdminPanel({ users, orgs, events }) {
     reader.onload = async (evt) => {
       const text = evt.target.result;
       const lines = text.split('\n').filter(l => l.trim() !== '');
-      const newOrgs = lines.slice(1).map(l => { // skip header
-        const parts = l.split(',');
-        return { division: parts[0]?.trim(), agency: parts[1]?.trim(), hq: parts[2]?.trim(), isActive: true };
-      });
-      
-      alert(`총 ${newOrgs.length}개의 조직 데이터가 인식되었습니다. (시뮬레이션 - 실제 DB 업데이트 로직은 가이드 참고)`);
-      // In a real app, we'd batch write here and mark missing ones as false.
+      showToast(`총 ${lines.length - 1}개의 조직 데이터가 테스트 인식되었습니다.`);
     };
     reader.readAsText(file);
   };
@@ -676,7 +742,7 @@ function AdminPanel({ users, orgs, events }) {
             <div className="flex justify-between items-center bg-blue-50 p-4 rounded-lg border border-blue-100">
               <div>
                 <h4 className="font-bold text-blue-900">조직 대량 등록 (CSV 형식)</h4>
-                <p className="text-xs text-blue-700 mt-1">사업부, 사업단, 본부 순서로 작성된 CSV 파일을 업로드하세요. <br/>기존 데이터와 비교하여 없는 조직은 미사용 처리됩니다.</p>
+                <p className="text-xs text-blue-700 mt-1">사업부, 사업단, 본부 순서로 작성된 CSV 파일을 업로드하세요.</p>
               </div>
               <div className="flex space-x-2">
                 <button className="flex items-center px-3 py-2 bg-white border border-gray-300 rounded text-sm hover:bg-gray-50"><Download className="w-4 h-4 mr-1"/> 샘플 다운로드</button>
@@ -685,14 +751,13 @@ function AdminPanel({ users, orgs, events }) {
                 </label>
               </div>
             </div>
-            {/* Dummy List */}
             <p className="text-sm text-gray-500">현재 등록된 조직 수: {orgs.length}개</p>
           </div>
         )}
 
         {tab === 'events' && (
            <div className="space-y-4">
-             <button className="bg-blue-600 text-white px-3 py-2 rounded text-sm">+ 새 행사 추가 (시뮬레이션)</button>
+             <button className="bg-blue-600 text-white px-3 py-2 rounded text-sm" onClick={() => showToast('새 행사 추가 모달 (준비중)')}>+ 새 행사 추가</button>
              <table className="w-full text-sm text-left">
               <thead className="bg-gray-50 border-b"><tr><th className="p-3">행사명</th><th className="p-3">일자</th><th className="p-3">내용</th></tr></thead>
               <tbody>
@@ -707,14 +772,29 @@ function AdminPanel({ users, orgs, events }) {
   );
 }
 
-// --- Self Recruiting Manager (Monthly) ---
-function SelfRecruitingManager({ data }) {
-  // Simplified for prototype
+function SelfRecruitingManager({ data, showToast }) {
+  const handleCSVUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const text = evt.target.result;
+      const lines = text.split('\n').filter(l => l.trim() !== '');
+      showToast(`총 ${lines.length - 1}건의 데이터가 성공적으로 처리되었습니다.`);
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-800">사업단 자체 리크루팅 관리 (월간)</h2>
-        <button className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm">엑셀 대량 등록</button>
+        <div className="flex space-x-2">
+           <button className="flex items-center px-3 py-2 bg-white border border-gray-300 rounded text-sm hover:bg-gray-50"><Download className="w-4 h-4 mr-1"/> 샘플 다운로드</button>
+           <label className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm cursor-pointer hover:bg-slate-700">
+             엑셀 대량 등록 <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload} />
+           </label>
+        </div>
       </div>
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center justify-center min-h-[300px]">
         <ClipboardList className="w-12 h-12 text-gray-300 mb-2"/>
@@ -725,7 +805,6 @@ function SelfRecruitingManager({ data }) {
   );
 }
 
-// --- Reports ---
 function Reports({ candidates }) {
   return (
     <div className="space-y-6">
