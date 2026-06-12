@@ -23,10 +23,13 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'vm-rts-default';
 
-const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
-const getDocRef = (colName, id) => doc(db, 'artifacts', appId, 'public', 'data', colName, id);
+// 캔버스 환경에서 부여되는 ID에 포함된 '/' 슬래시를 '-'로 치환하여 Firestore 경로 에러(홀수 세그먼트) 방지
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'vm-rts-default';
+const safeAppId = rawAppId.replace(/\//g, '-'); 
+
+const getColRef = (colName) => collection(db, 'artifacts', safeAppId, 'public', 'data', colName);
+const getDocRef = (colName, id) => doc(db, 'artifacts', safeAppId, 'public', 'data', colName, id);
 
 export default function App() {
   const [authUser, setAuthUser] = useState(null);
