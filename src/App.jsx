@@ -24,7 +24,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// 캔버스 환경에서 부여되는 ID에 포함된 '/' 슬래시를 '-'로 치환하여 Firestore 경로 에러(홀수 세그먼트) 방지
+// 캔버스 환경 및 Vercel 경로 인식 오류 방지용 안전한 ID 처리
 const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'vm-rts-default';
 const safeAppId = rawAppId.replace(/\//g, '-'); 
 
@@ -45,7 +45,6 @@ export default function App() {
   const [currentView, setCurrentView] = useState('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
-  // Custom Toast Message State (알림창 대체용)
   const [toastMsg, setToastMsg] = useState('');
 
   const showToast = (msg) => {
@@ -208,7 +207,7 @@ export default function App() {
       {/* Sidebar */}
       <div className={`fixed inset-y-0 left-0 z-40 w-64 bg-slate-900 text-white transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <h1 className="text-xl font-bold tracking-wider text-blue-400">VM-RTS <span className="text-xs text-gray-400">v1.2.0</span></h1>
+          <h1 className="text-xl font-bold tracking-wider text-blue-400">VM-RTS <span className="text-xs text-gray-400">v1.2.1</span></h1>
           <button className="md:hidden text-gray-300 hover:text-white" onClick={() => setIsMobileMenuOpen(false)}><XCircle /></button>
         </div>
         <nav className="p-4 space-y-2">
@@ -247,11 +246,11 @@ export default function App() {
         </header>
 
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-50 p-4 md:p-6">
-          {currentView === 'dashboard' && <Dashboard candidates={candidates} selfRecruiting={selfRecruiting} orgs={organizations} />}
-          {currentView === 'candidates' && <CandidateManager candidates={candidates} appUser={appUser} events={events} orgs={organizations} showToast={showToast} />}
+          {currentView === 'dashboard' && <Dashboard candidates={candidates} />}
+          {currentView === 'candidates' && <CandidateManager candidates={candidates} appUser={appUser} events={events} showToast={showToast} />}
           {currentView === 'admin' && appUser?.role === 'admin' && <AdminPanel users={users} orgs={organizations} events={events} showToast={showToast} />}
-          {currentView === 'self-recruiting' && <SelfRecruitingManager data={selfRecruiting} orgs={organizations} showToast={showToast} />}
-          {currentView === 'reports' && <Reports candidates={candidates} selfRecruiting={selfRecruiting} orgs={organizations} events={events} />}
+          {currentView === 'self-recruiting' && <SelfRecruitingManager data={selfRecruiting} showToast={showToast} />}
+          {currentView === 'reports' && <Reports candidates={candidates} />}
         </main>
       </div>
     </div>
@@ -335,7 +334,7 @@ function AuthScreen({ onLogin, onSignUp }) {
   );
 }
 
-function Dashboard({ candidates, selfRecruiting, orgs }) {
+function Dashboard({ candidates }) {
   const stats = useMemo(() => {
     let meeting = 0, processing = 0, completed = 0, dropped = 0;
     let indMoves = 0, orgMoves = 0;
@@ -432,7 +431,7 @@ function StatusBadge({ status }) {
   return <span className={`px-2 py-1 rounded text-xs font-medium ${colors[status] || 'bg-gray-100'}`}>{status}</span>;
 }
 
-function CandidateManager({ candidates, appUser, events, orgs, showToast }) {
+function CandidateManager({ candidates, appUser, events, showToast }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -546,12 +545,12 @@ function CandidateManager({ candidates, appUser, events, orgs, showToast }) {
         </div>
       </div>
 
-      {isModalOpen && <CandidateModal cand={editingDoc} onClose={() => setIsModalOpen(false)} onSave={handleSave} onAddHistory={handleAddHistory} events={events} orgs={orgs} />}
+      {isModalOpen && <CandidateModal cand={editingDoc} onClose={() => setIsModalOpen(false)} onSave={handleSave} onAddHistory={handleAddHistory} events={events} />}
     </div>
   );
 }
 
-function CandidateModal({ cand, onClose, onSave, onAddHistory, events, orgs }) {
+function CandidateModal({ cand, onClose, onSave, onAddHistory, events }) {
   const [activeTab, setActiveTab] = useState('info');
   const [formData, setFormData] = useState(cand || {
     type: 'individual', status: '미팅', name: '', phone: '', currentCo: '', 
@@ -694,6 +693,7 @@ function AdminPanel({ users, orgs, events, showToast }) {
       showToast("처리가 완료되었습니다.");
     } catch (e) { 
       showToast("처리 실패"); 
+      console.error(e);
     }
   };
 
@@ -801,7 +801,7 @@ function SelfRecruitingManager({ data, showToast }) {
       </div>
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center justify-center min-h-[300px]">
         <ClipboardList className="w-12 h-12 text-gray-300 mb-2"/>
-        <p className="text-gray-500">사업단 자체 리크루팅 데이터가 없습니다.</p>
+        <p className="text-gray-500">사업단 자체 리크루팅 데이터가 없습니다. (총 {data?.length || 0}건)</p>
         <p className="text-sm text-gray-400 mt-1">엑셀 업로드를 통해 월별 데이터를 관리할 수 있습니다.</p>
       </div>
     </div>
